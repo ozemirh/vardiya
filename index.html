@@ -49,14 +49,6 @@
   }
   .primary { background: #2563eb; color: white; }
   .primary:disabled { background: #475569; cursor: not-allowed; }
-  .link {
-    background: none;
-    color: #64748b;
-    font-size: 13px;
-    font-weight: 400;
-    padding: 10px 0 0;
-    text-decoration: underline;
-  }
   .hidden { display: none; }
 
   /* ---- Bilgilendirme pop-up'ı ---- */
@@ -122,7 +114,6 @@
   <div id="mainScreen" class="hidden">
     <p id="welcomeText" style="font-size:15px;color:#94a3b8;"></p>
     <button class="primary" id="checkinBtn" onclick="handleCheckIn()">Giriş / Çıkış Yap</button>
-    <button class="link" onclick="handleForget()">Ben başkasıyım / bilgilerimi değiştir</button>
   </div>
 </div>
 
@@ -138,7 +129,7 @@
 <script>
   // ---- AYAR: Apps Script Web App URL'inizi buraya yapıştırın ----
   // Kurulum adımları için README.md dosyasına bakın.
-  var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx2juhUt8kNtMRvmPT8LH70zP5VYSoRRQyoQruLfIz_phx20OJvAB1IVuPhHe34hZs/exec';
+  var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxGm6dWZjg-4X_Cp1Yo67SdAPd-YzTDGeBo4vCCOUfH_HHdfqr8meVaQzlpOW2Dyt4/exec';
   // ---------------------------------------------------------------
 
   var NAME_KEY = 'vardiya_ad';
@@ -250,14 +241,6 @@
 
     localStorage.setItem(NAME_KEY, name);
     localStorage.setItem(SURNAME_KEY, surname);
-    init();
-  }
-
-  function handleForget() {
-    localStorage.removeItem(NAME_KEY);
-    localStorage.removeItem(SURNAME_KEY);
-    document.getElementById('regName').value = '';
-    document.getElementById('regSurname').value = '';
     init();
   }
 
