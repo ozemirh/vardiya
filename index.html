@@ -113,6 +113,7 @@
 
   <div id="mainScreen" class="hidden">
     <p id="welcomeText" style="font-size:15px;color:#94a3b8;"></p>
+    <p id="lastActionText" style="font-size:13px;color:#64748b;margin:-6px 0 4px;"></p>
     <button class="primary" id="checkinBtn" onclick="handleCheckIn()">Giriş / Çıkış Yap</button>
   </div>
 </div>
@@ -144,6 +145,10 @@
   // Kayıt isteği için deneme süreleri. İlk deneme uzun tutulur çünkü Apps Script'in
   // soğuk başlangıcı birkaç saniye sürebiliyor; sonraki denemeler daha kısadır.
   var LOG_ATTEMPT_TIMEOUTS_MS = [25000, 15000, 15000];
+  // Ön ısıtma (bkz. aşağıdaki "ISITMA" bölümü)
+  var WARM_FIX_MAX_AGE_MS = 30000;           // bundan eski ısıtma konumu kullanılmaz
+  var WARM_LOCATION_MAX_MS = 5 * 60 * 1000;  // sayfa açık kalırsa takibi bu süre sonunda durdur
+  var WARM_REQUEST_TIMEOUT_MS = 10000;       // ısıtma isteği — başarısız olursa sessizce geçilir
 
   /**
    * Bilgilendirme pop-up'ı.
@@ -234,6 +239,86 @@
     document.body.appendChild(script);
   }
 
+  /* ================== ISITMA ==================
+   * Kaydın en yavaş iki adımı, butona basmakla ilgisi olmayan iki bekleyiştir:
+   * telefonun GPS'i ilk kez kilitlemesi (saniyeler) ve Apps Script'in soğuk
+   * başlangıcı (saniyeler). İkisi de sayfa açılır açılmaz arka planda başlatılır,
+   * böylece kullanıcı butona bastığında iş çoktan bitmiş olur.
+   */
+
+  var warmPosition = null;   // arka planda toplanan en iyi konum
+  var warmWatchId = null;
+
+  function startLocationWarmup() {
+    if (warmWatchId !== null || !navigator.geolocation) { return; }
+
+    warmWatchId = navigator.geolocation.watchPosition(
+      function (position) {
+        // Eşitlikte de güncelle — aynı hassasiyetteki yeni okuma daha tazedir
+        if (!warmPosition || position.coords.accuracy <= warmPosition.coords.accuracy) {
+          warmPosition = position;
+        }
+      },
+      function () { /* yoksay — butona basınca normal konum akışı devreye girer */ },
+      { enableHighAccuracy: true, maximumAge: 0 }
+    );
+
+    // Sayfa uzun süre açık unutulursa pili boşuna tüketmesin
+    setTimeout(stopLocationWarmup, WARM_LOCATION_MAX_MS);
+  }
+
+  function stopLocationWarmup() {
+    if (warmWatchId === null) { return; }
+    navigator.geolocation.clearWatch(warmWatchId);
+    warmWatchId = null;
+  }
+
+  /**
+   * Isıtmayı yalnızca konum izni DAHA ÖNCE verilmişse başlatır.
+   * İzin durumu bilinmiyorsa hiçbir şey yapılmaz: aksi halde sayfa açılır açılmaz
+   * izin penceresi çıkar ve kullanıcı ne istendiğini anlamadan reddedebilir.
+   * Yani ilk kullanım eskisi gibi, sonraki her okutma hızlı olur.
+   */
+  function startLocationWarmupIfAllowed() {
+    if (!navigator.geolocation || !navigator.permissions || !navigator.permissions.query) {
+      return;
+    }
+    navigator.permissions.query({ name: 'geolocation' }).then(
+      function (status) {
+        if (status.state === 'granted') { startLocationWarmup(); }
+      },
+      function () { /* sorgulanamıyorsa ısıtma yapılmaz */ }
+    );
+  }
+
+  /** Isıtmadan gelen konum hâlâ güvenle kullanılabilir mi? Değilse null. */
+  function freshWarmPosition() {
+    if (!warmPosition) { return null; }
+    if (warmPosition.coords.accuracy > GOOD_ACCURACY_M) { return null; }
+    if (Date.now() - warmPosition.timestamp > WARM_FIX_MAX_AGE_MS) { return null; }
+    return warmPosition;
+  }
+
+  /**
+   * Sunucuyu uyandırır ve son işlemi ekranda gösterir.
+   * Hafif bir sorgu ('status'), ama Apps Script örneğini ve tablo bağlantısını
+   * ayağa kaldırdığı için asıl kayıt isteği hazır bir sunucuya düşer.
+   */
+  function warmUpServer(name, surname) {
+    callApi(
+      { action: 'status', name: name, surname: surname },
+      function (st) {
+        if (st && st.lastAction && st.lastTime) {
+          document.getElementById('lastActionText').textContent =
+            'Son işlem: ' + st.lastAction + ' — ' + st.lastTime;
+        }
+      },
+      function () { /* yoksay — ısıtma başarısız olsa da kayıt akışı çalışır */ },
+      WARM_REQUEST_TIMEOUT_MS
+    );
+  }
+  /* ============== ISITMA SONU ============== */
+
   function init() {
     var name = localStorage.getItem(NAME_KEY);
     var surname = localStorage.getItem(SURNAME_KEY);
@@ -241,6 +326,8 @@
       document.getElementById('registerForm').classList.add('hidden');
       document.getElementById('mainScreen').classList.remove('hidden');
       document.getElementById('welcomeText').textContent = 'Merhaba, ' + name + ' ' + surname;
+      startLocationWarmupIfAllowed();
+      warmUpServer(name, surname);
     } else {
       document.getElementById('registerForm').classList.remove('hidden');
       document.getElementById('mainScreen').classList.add('hidden');
@@ -277,6 +364,15 @@
 
     var btn = document.getElementById('checkinBtn');
     btn.disabled = true;
+
+    // Isıtmadan taze ve hassas bir konum varsa doğrudan kaydet: konum bekleme adımı
+    // tamamen atlanır. Böyle bir konumun var olması izninin verildiğinin de kanıtıdır,
+    // o yüzden aşağıdaki izin kontrolüne de gerek kalmaz.
+    var warm = freshWarmPosition();
+    if (warm) {
+      submitPosition(btn, name, surname, warm);
+      return;
+    }
 
     // Daha önce izin reddedildiyse tarayıcı otomatik olarak yeniden sormaz;
     // kullanıcıya izni nasıl açacağını göstermemiz gerekir.
@@ -379,39 +475,47 @@
     );
   }
 
+  /** Elde edilmiş bir konumla kayıt isteğini gönderir. */
+  function submitPosition(btn, name, surname, position) {
+    showPopup('info', 'Kaydediliyor...');
+    sendLogWithRetry(
+      {
+        action: 'log',
+        name: name,
+        surname: surname,
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+        reqId: newRequestId()
+      },
+      0,
+      function (result) {
+        btn.disabled = false;
+        stopLocationWarmup(); // işlem bitti, konum takibini sürdürmenin anlamı yok
+        document.getElementById('lastActionText').textContent =
+          'Son işlem: ' + result.action + ' — ' + result.time;
+        showPopup('ok', result.action + ' kaydınız alındı',
+          result.name + ' ' + result.surname + ' — saat ' + result.time);
+      },
+      function (err) {
+        // Kural hatalarını doğrudan göster; yalnızca ulaşım hatalarında
+        // kaydın yine de oluşmuş olabileceğini sunucudan doğrula.
+        if (!err.transport) {
+          btn.disabled = false;
+          showPopup('err', err.message);
+          return;
+        }
+        verifyAfterFailure(btn, name, surname, err);
+      }
+    );
+  }
+
   function requestLocationAndCheckIn(btn, name, surname) {
     showPopup('info', 'Konumunuz alınıyor...');
 
     getBestPosition(
       function (position) {
-        showPopup('info', 'Kaydediliyor...');
-        sendLogWithRetry(
-          {
-            action: 'log',
-            name: name,
-            surname: surname,
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-            accuracy: position.coords.accuracy,
-            reqId: newRequestId()
-          },
-          0,
-          function (result) {
-            btn.disabled = false;
-            showPopup('ok', result.action + ' kaydınız alındı',
-              result.name + ' ' + result.surname + ' — saat ' + result.time);
-          },
-          function (err) {
-            // Kural hatalarını doğrudan göster; yalnızca ulaşım hatalarında
-            // kaydın yine de oluşmuş olabileceğini sunucudan doğrula.
-            if (!err.transport) {
-              btn.disabled = false;
-              showPopup('err', err.message);
-              return;
-            }
-            verifyAfterFailure(btn, name, surname, err);
-          }
-        );
+        submitPosition(btn, name, surname, position);
       },
       function (error) {
         btn.disabled = false;
