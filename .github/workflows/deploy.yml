@@ -6,3 +6,4 @@ permissions:
   contents: read
   pages: write      # GitHub Pages'e dağıtım yapma izni
   id-token: write   # Güvenli kimlik doğrulama için gerekli
+
