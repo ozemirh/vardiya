@@ -1,0 +1,8 @@
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write      # GitHub Pages'e dağıtım yapma izni
+  id-token: write   # Güvenli kimlik doğrulama için gerekli
